@@ -129,7 +129,7 @@ function formatWatts(w) {
 
 // Сирі дані хмари для діагностики; ідентифікатори пристрою приховано.
 function diagnosticsText(devices, now) {
-  const secret = /sn|devid|mac|token|mail|uid|^id$|password|pwd/i;
+  const secret = /sn|devid|mac|token|mail|uid|^id$|password|pwd|salt/i;
   const masked = (devices || []).map((d) => {
     const out = {};
     for (const [k, v] of Object.entries(d)) {
