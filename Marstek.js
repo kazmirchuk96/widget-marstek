@@ -276,7 +276,8 @@ async function loadState() {
     let history = readHistory();
     const now = summarize(devices, CONFIG);
     if (now) {
-      history = updateHistory(history, now.reportedAt || Date.now(), now.soc);
+      // Час беремо свій: report_time у хмарі не оновлюється разом із зарядом.
+      history = updateHistory(history, Date.now(), now.soc);
       fm.writeString(historyPath(), JSON.stringify(history));
     }
     const state = { devices, fetchedAt: Date.now(), history };
@@ -420,8 +421,7 @@ function buildWidget(state) {
   name.font = Font.boldSystemFont(10);
   name.textColor = new Color("#ffffff", 0.6);
   head.addSpacer();
-  const when = sum.reportedAt || state.fetchedAt;
-  const upd = head.addText((state.stale ? "⚠ " : "") + timeLabel(when));
+  const upd = head.addText((state.stale ? "⚠ " : "") + timeLabel(state.fetchedAt));
   upd.font = Font.systemFont(10);
   upd.textColor = state.stale ? new Color("#ff9f0a") : new Color("#ffffff", 0.45);
 
