@@ -80,7 +80,7 @@ function pickDevices(devices, cfg) {
 // Зводить дані станцій у те, що показує віджет.
 // mode: "discharging" — hours = на скільки вистачить; "charging" — hours = до повного заряду;
 //       "idle" — навантаження немає, hours = null.
-function summarize(devices, cfg) {
+function summarize(devices, cfg, est) {
   const list = pickDevices(devices, cfg);
   if (!list.length) return null;
 
@@ -109,7 +109,83 @@ function summarize(devices, cfg) {
   const times = list.map((d) => num(d.report_time)).filter((t) => t > 1e9);
   const reportedAt = times.length ? Math.min(...times) * 1000 : null;
 
-  return { soc, load, charge, discharge, mode, hours, count: list.length, reportedAt };
+  // Хмара не передає потужність виходу Backup, тому коли вона показує нуль,
+  // беремо оцінку за швидкістю зміни заряду (est.pctPerHour — відсотків за годину).
+  let estimated = false;
+  let shownLoad = load;
+  let shownCharge = charge;
+  if (mode === "idle" && est && est.pctPerHour > 0) {
+    const watts = (est.pctPerHour / 100) * totalKwh * 1000;
+    if (watts > cfg.idleWatts) {
+      estimated = true;
+      if (est.dir === "down") {
+        mode = "discharging";
+        shownLoad = watts;
+        hours = Math.max(0, soc - cfg.minSoc) / est.pctPerHour;
+      } else {
+        mode = "charging";
+        shownCharge = watts;
+        hours = Math.max(0, 100 - soc) / est.pctPerHour;
+      }
+    }
+  }
+
+  return {
+    soc, load: shownLoad, charge: shownCharge, discharge, mode, hours, estimated,
+    count: list.length, reportedAt,
+  };
+}
+
+// ───────────── Оцінка за зміною заряду ─────────────
+const MINUTE = 60 * 1000;
+const HOUR = 60 * MINUTE;
+
+// Історія — це моменти, коли відсоток заряду змінився. edge = true означає, що момент зміни
+// відомий досить точно (попередній замір був не давніше 30 хв тому).
+function updateHistory(hist, t, soc) {
+  const h = hist && Array.isArray(hist.samples) ? { samples: hist.samples.slice(), lastSeen: hist.lastSeen } : { samples: [], lastSeen: 0 };
+  soc = Math.round(soc);
+  if (!h.samples.length) {
+    h.samples.push({ t, soc, edge: false });
+    h.lastSeen = t;
+    return h;
+  }
+  if (t <= h.lastSeen) return h;
+  const last = h.samples[h.samples.length - 1];
+  if (soc !== last.soc) {
+    const gap = t - h.lastSeen;
+    // Зміна сталася десь між двома замірами — беремо середину.
+    h.samples.push({ t: Math.round((h.lastSeen + t) / 2), soc, edge: gap <= 30 * MINUTE });
+    if (h.samples.length > 60) h.samples = h.samples.slice(-60);
+  }
+  h.lastSeen = t;
+  return h;
+}
+
+// Повертає { pctPerHour, dir: "down" | "up" } або null, якщо даних замало чи заряд давно не змінюється.
+function estimateFromHistory(hist, now) {
+  const s = hist && Array.isArray(hist.samples) ? hist.samples : [];
+  if (s.length < 2) return null;
+  const last = s[s.length - 1];
+  const dir = Math.sign(s[s.length - 2].soc - last.soc); // 1 — розряд, -1 — заряд
+  if (dir === 0) return null;
+
+  // Ідемо назад, доки заряд змінюється в той самий бік, не далі ніж на 2 години.
+  let i = s.length - 1;
+  while (i > 0 && s[i].edge && Math.sign(s[i - 1].soc - s[i].soc) === dir && last.t - s[i - 1].t <= 2 * HOUR) i--;
+  // Перший замір після паузи неточний у часі: якщо точок досить, відкидаємо його.
+  if (!s[i].edge && s.length - 1 - i >= 2) i++;
+  const start = s[i];
+  const dSoc = Math.abs(start.soc - last.soc);
+  const span = last.t - start.t;
+  if (dSoc === 0 || span <= 0) return null;
+
+  let pctPerHour = dSoc / (span / HOUR);
+  const idle = now - last.t;
+  if (idle > 2 * HOUR) return null; // заряд давно стоїть — навантаження немає
+  // Якщо наступний відсоток затримується, навантаження впало — знижуємо оцінку.
+  if (idle > (2 * span) / dSoc) pctPerHour = Math.min(pctPerHour, 1 / (idle / HOUR));
+  return { pctPerHour, dir: dir === 1 ? "down" : "up" };
 }
 
 function formatDuration(hours) {
@@ -174,6 +250,20 @@ async function fetchDevices() {
   return data.data;
 }
 
+function historyPath() {
+  const fm = FileManager.local();
+  return fm.joinPath(fm.libraryDirectory(), "marstek-history.json");
+}
+
+function readHistory() {
+  const fm = FileManager.local();
+  try {
+    return fm.fileExists(historyPath()) ? JSON.parse(fm.readString(historyPath())) : null;
+  } catch (e) {
+    return null;
+  }
+}
+
 function cachePath() {
   const fm = FileManager.local();
   return fm.joinPath(fm.cacheDirectory(), CACHE_FILE);
@@ -183,7 +273,13 @@ async function loadState() {
   const fm = FileManager.local();
   try {
     const devices = await fetchDevices();
-    const state = { devices, fetchedAt: Date.now() };
+    let history = readHistory();
+    const now = summarize(devices, CONFIG);
+    if (now) {
+      history = updateHistory(history, now.reportedAt || Date.now(), now.soc);
+      fm.writeString(historyPath(), JSON.stringify(history));
+    }
+    const state = { devices, fetchedAt: Date.now(), history };
     fm.writeString(cachePath(), JSON.stringify(state));
     return { ...state, stale: false };
   } catch (e) {
@@ -263,9 +359,19 @@ function messageWidget(text) {
   return w;
 }
 
+// Оцінку показуємо зі знаком ≈ і округлюємо до десятків; нуль від хмари — як «—».
+function loadLabel(sum) {
+  if (sum.load <= CONFIG.idleWatts) return "—";
+  return sum.estimated ? `≈${formatWatts(Math.round(sum.load / 10) * 10)}` : formatWatts(sum.load);
+}
+
+function chargeLabel(sum) {
+  return sum.estimated ? `≈${formatWatts(Math.round(sum.charge / 10) * 10)}` : formatWatts(sum.charge);
+}
+
 function buildLockScreen(sum) {
   const w = new ListWidget();
-  const l1 = w.addText(`🔋 ${Math.round(sum.soc)}%  ·  ${formatWatts(sum.load)}`);
+  const l1 = w.addText(`🔋 ${Math.round(sum.soc)}%  ·  ${loadLabel(sum)}`);
   l1.font = Font.boldSystemFont(14);
   const l2 = w.addText(
     sum.mode === "idle" ? "Без навантаження" : `${runtimeTitle(sum.mode)}: ${formatDuration(sum.hours)}`
@@ -292,7 +398,7 @@ function addMetric(stack, title, value, valueColor) {
 }
 
 function buildWidget(state) {
-  const sum = summarize(state.devices, CONFIG);
+  const sum = summarize(state.devices, CONFIG, estimateFromHistory(state.history, Date.now()));
   if (!sum) return messageWidget("У акаунті Marstek не знайдено станцій");
 
   const family = config.widgetFamily || "small";
@@ -329,7 +435,7 @@ function buildWidget(state) {
   socText.textColor = color;
   if (sum.mode === "charging") {
     socRow.addSpacer(6);
-    const ch = socRow.addText(`⚡ +${formatWatts(sum.charge)}`);
+    const ch = socRow.addText(`⚡ +${chargeLabel(sum)}`);
     ch.font = Font.systemFont(11);
     ch.textColor = new Color("#30d158");
     ch.lineLimit = 1;
@@ -345,12 +451,12 @@ function buildWidget(state) {
   const runtime = sum.mode === "idle" ? "—" : formatDuration(sum.hours);
   if (wide) {
     const row = w.addStack();
-    addMetric(row, "Навантаження", formatWatts(sum.load));
+    addMetric(row, "Навантаження", loadLabel(sum));
     row.addSpacer();
     addMetric(row, runtimeTitle(sum.mode), runtime, sum.mode === "charging" ? new Color("#30d158") : null);
     row.addSpacer();
   } else {
-    addMetric(w, "Навантаження", formatWatts(sum.load));
+    addMetric(w, "Навантаження", loadLabel(sum));
     w.addSpacer(4);
     addMetric(w, runtimeTitle(sum.mode), runtime, sum.mode === "charging" ? new Color("#30d158") : null);
   }
@@ -377,6 +483,7 @@ async function main() {
         let text;
         try {
           text = diagnosticsText(await fetchDevices(), Date.now());
+          text += "\n\nІсторія заряду:\n" + JSON.stringify(readHistory());
         } catch (e) {
           text = `Помилка: ${e.message || e}`;
         }
@@ -406,7 +513,7 @@ async function main() {
 
 if (typeof ListWidget === "undefined") {
   // Запуск поза Scriptable (тести в Node).
-  module.exports = { md5, summarize, formatDuration, formatWatts, diagnosticsText, CONFIG };
+  module.exports = { md5, summarize, formatDuration, formatWatts, diagnosticsText, updateHistory, estimateFromHistory, CONFIG };
 } else {
   await main();
 }

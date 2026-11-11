@@ -7,7 +7,7 @@ const AsyncFunction = (async () => {}).constructor;
   // 1) pure logic
   const mod = { exports: {} };
   await new AsyncFunction("module", src)(mod);
-  const { md5, summarize, formatDuration, formatWatts, diagnosticsText, CONFIG } = mod.exports;
+  const { md5, summarize, formatDuration, formatWatts, diagnosticsText, updateHistory, estimateFromHistory, CONFIG } = mod.exports;
   for (const s of ["", "a", "abc", "password123", "Пароль!їє€", "x".repeat(55), "x".repeat(56), "x".repeat(64), "x".repeat(200)])
     assert.strictEqual(md5(s), crypto.createHash("md5").update(s, "utf8").digest("hex"), "md5 " + s.length);
   let r = summarize([{ soc: "80", load: 500, charge: 0, discharge: 500, report_time: 1794000000 }], CONFIG);
@@ -27,6 +27,40 @@ const AsyncFunction = (async () => {}).constructor;
   const diag = diagnosticsText([{ devid: "abcdef123", sn: "SN998877", name: "Venus", soc: 95, load: 0 }], 1794000000000);
   assert.ok(!diag.includes("abcdef123") && !diag.includes("SN998877"), "ідентифікатори приховано");
   assert.ok(diag.includes('"soc": 95') && diag.includes('"name": "Venus"') && diag.includes("unix 1794000000"));
+  // Оцінка за зміною заряду: моделюємо розряд із заданою потужністю, віджет оновлюється нерівномірно.
+  const MIN = 60000;
+  const simulate = (watts, minutes, stepFn, startSoc = 95) => {
+    let hist = null, t = 1794000000000, exact = startSoc + 0.4, est = null;
+    const end = t + minutes * MIN;
+    for (let k = 0; t < end; k++) {
+      hist = updateHistory(hist, t, Math.floor(exact));
+      est = estimateFromHistory(hist, t);
+      const step = stepFn(k);
+      exact -= (watts / 5120) * 100 * (step / 60);
+      t += step * MIN;
+    }
+    return { hist, est, t };
+  };
+  const toWatts = (e) => (e.pctPerHour / 100) * 5120;
+  for (const [watts, steps] of [[189, (k) => 5], [189, (k) => [7, 15, 4, 11][k % 4]], [1000, (k) => 5], [60, (k) => 10]]) {
+    const { est } = simulate(watts, 150, steps);
+    assert.ok(est && est.dir === "down", "є оцінка для " + watts);
+    const err = Math.abs(toWatts(est) - watts) / watts;
+    console.log(`розряд ${watts} Вт → оцінка ${Math.round(toWatts(est))} Вт (похибка ${Math.round(err * 100)}%)`);
+    assert.ok(err < 0.3, "похибка для " + watts + ": " + err);
+  }
+  let sim = simulate(-800, 120, () => 5, 40); // заряджання
+  assert.strictEqual(sim.est.dir, "up"); assert.ok(Math.abs(toWatts(sim.est) - 800) / 800 < 0.3);
+  assert.strictEqual(simulate(189, 10, () => 5).est, null, "замало даних — оцінки немає");
+  sim = simulate(189, 120, () => 5);
+  assert.strictEqual(estimateFromHistory(sim.hist, sim.t + 3 * 60 * MIN), null, "заряд давно стоїть — оцінки немає");
+  const slowed = estimateFromHistory(sim.hist, sim.t + 60 * MIN);
+  assert.ok(toWatts(slowed) < 70, "навантаження зникло — оцінка падає");
+  r = summarize([{ soc: 80, load: 0, charge: 0, discharge: 0 }], CONFIG, { pctPerHour: 4, dir: "down" });
+  assert.strictEqual(r.mode, "discharging"); assert.ok(r.estimated); assert.strictEqual(r.hours, 17);
+  assert.ok(Math.abs(r.load - 204.8) < 1e-9);
+  r = summarize([{ soc: 80, load: 300, discharge: 300 }], CONFIG, { pctPerHour: 4, dir: "down" });
+  assert.ok(!r.estimated && r.load === 300, "дані хмари мають пріоритет");
   console.log("logic OK");
 
   // 2) full run with Scriptable stubs
