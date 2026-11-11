@@ -1,5 +1,7 @@
 const fs = require("fs"), crypto = require("crypto"), assert = require("assert");
-const src = fs.readFileSync(require("path").join(__dirname, "..", "Marstek.js"), "utf8");
+const path = require("path");
+const src = fs.readFileSync(path.join(__dirname, "..", "Marstek.js"), "utf8");
+const loader = fs.readFileSync(path.join(__dirname, "..", "Loader.js"), "utf8");
 const AsyncFunction = (async () => {}).constructor;
 (async () => {
   // 1) pure logic
@@ -30,21 +32,26 @@ const AsyncFunction = (async () => {}).constructor;
   const stack = () => ({ addText: (s) => (texts.push(s), {}), addStack: stack, addSpacer() {}, addImage: () => ({}), layoutVertically() {}, centerAlignContent() {}, bottomAlignContent() {}, setPadding() {} });
   const kc = { "marstek.email": "a@b.c", "marstek.pwdhash": "h", "marstek.token": "old" };
   const files = {}; const calls = [];
+  for (const [label, code] of [["віджет", src], ["завантажувач", loader], ["завантажувач без мережі", loader]])
   for (const family of ["small", "medium", "accessoryRectangular"]) {
     texts.length = 0;
     const g = {
       module: {}, config: { runsInWidget: true, runsInApp: false, widgetFamily: family },
       ListWidget: function () { return stack(); },
       Keychain: { contains: (k) => k in kc, get: (k) => kc[k], set: (k, v) => (kc[k] = v), remove: (k) => delete kc[k] },
-      Request: function (url) { this.loadJSON = async () => { calls.push(url);
+      Request: function (url) { this.response = { statusCode: 200 };
+        this.loadString = async () => { if (label.includes("без мережі")) throw new Error("offline"); return src; };
+        this.loadJSON = async () => { calls.push(url);
         if (url.includes("v2_get_device")) return { token: "new" };
         return url.endsWith("token=new") ? { data: [{ type: "HMG-50", name: "Venus", soc: 76, load: 420, charge: 0, discharge: 420, report_time: 1794000000 }] } : { code: 8, msg: "no access" }; }; },
-      FileManager: { local: () => ({ joinPath: (a, b) => a + "/" + b, cacheDirectory: () => "/c", writeString: (p, s) => (files[p] = s), fileExists: (p) => p in files, readString: (p) => files[p] }) },
+      FileManager: { local: () => ({ joinPath: (a, b) => a + "/" + b, cacheDirectory: () => "/c", libraryDirectory: () => "/l", writeString: (p, s) => (files[p] = s), fileExists: (p) => p in files, readString: (p) => files[p] }) },
       Color: Object.assign(function () {}, { white: () => ({}) }), LinearGradient: function () {}, Font: any(), DrawContext: any(), Size: any(), Path: any(), Rect: any(),
       DateFormatter: function () { this.string = () => "12:00"; }, Script: { setWidget() {}, complete() {} }, Alert: any(),
     };
-    await new AsyncFunction(...Object.keys(g), src)(...Object.values(g));
-    console.log(family, "→", texts.join(" | "));
+    Object.assign(globalThis, g); // у Scriptable це справжні глобальні об'єкти
+    await new AsyncFunction(code)();
+    assert.ok(texts.includes("76%") || texts[0].includes("76%"), label + " " + family);
+    console.log(label, family, "→", texts.join(" | "));
   }
   console.log("requests:", calls.map((u) => u.replace(/https:\/\/[^/]+/, "")).join("  "));
 })().catch((e) => { console.error("FAIL", e); process.exit(1); });
