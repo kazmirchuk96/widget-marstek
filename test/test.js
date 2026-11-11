@@ -56,6 +56,17 @@ const AsyncFunction = (async () => {}).constructor;
   assert.strictEqual(estimateFromHistory(sim.hist, sim.t + 3 * 60 * MIN), null, "заряд давно стоїть — оцінки немає");
   const slowed = estimateFromHistory(sim.hist, sim.t + 60 * MIN);
   assert.ok(toWatts(slowed) < 70, "навантаження зникло — оцінка падає");
+  // Після довгої паузи між замірами оцінка не має занижувати навантаження (реально 250 Вт).
+  {
+    const t0 = 1794000000000, perPct = (51.2 / 250) * 60 * MIN; // хвилин на 1%
+    let h = updateHistory(null, t0, 93);
+    h = updateHistory(h, t0 + 40 * MIN, 92);            // пауза 40 хв — момент зміни невідомий
+    const t91 = t0 + 40 * MIN + 0.6 * perPct;
+    h = updateHistory(h, t91 - 2 * MIN, 92);
+    h = updateHistory(h, t91, 91);
+    const e = estimateFromHistory(h, t91);
+    assert.ok(e && toWatts(e) >= 250, "після паузи оцінка не занижена: " + (e && toWatts(e)));
+  }
   r = summarize([{ soc: 80, load: 0, charge: 0, discharge: 0 }], CONFIG, { pctPerHour: 4, dir: "down" });
   assert.strictEqual(r.mode, "discharging"); assert.ok(r.estimated); assert.strictEqual(r.hours, 17);
   assert.ok(Math.abs(r.load - 204.8) < 1e-9);

@@ -154,8 +154,10 @@ function updateHistory(hist, t, soc) {
   const last = h.samples[h.samples.length - 1];
   if (soc !== last.soc) {
     const gap = t - h.lastSeen;
-    // Зміна сталася десь між двома замірами — беремо середину.
-    h.samples.push({ t: Math.round((h.lastSeen + t) / 2), soc, edge: gap <= 30 * MINUTE });
+    // Зміна сталася десь між двома замірами — беремо середину. Після довгої паузи момент зміни
+    // невідомий: беремо час заміру, щоб оцінка навантаження була радше завищеною, ніж заниженою.
+    const edge = gap <= 30 * MINUTE;
+    h.samples.push({ t: edge ? Math.round((h.lastSeen + t) / 2) : t, soc, edge });
     if (h.samples.length > 60) h.samples = h.samples.slice(-60);
   }
   h.lastSeen = t;
