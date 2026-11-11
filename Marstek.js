@@ -509,7 +509,8 @@ async function main() {
   widget.refreshAfterDate = new Date(Date.now() + CONFIG.refreshMinutes * 60 * 1000);
 
   if (config.runsInWidget) Script.setWidget(widget);
-  else await widget.presentSmall();
+  else if (config.runsInApp) await widget.presentSmall();
+  // Запуск із «Команд» (автоматизація): дані вже отримано й історію заряду поповнено, показувати нічого не треба.
   Script.complete();
 }
 
