@@ -127,6 +127,22 @@ function formatWatts(w) {
   return w >= 1000 ? `${(w / 1000).toFixed(2).replace(".", ",")} кВт` : `${Math.round(w)} Вт`;
 }
 
+// Сирі дані хмари для діагностики; ідентифікатори пристрою приховано.
+function diagnosticsText(devices, now) {
+  const secret = /sn|devid|mac|token|mail|uid|^id$|password|pwd/i;
+  const masked = (devices || []).map((d) => {
+    const out = {};
+    for (const [k, v] of Object.entries(d)) {
+      out[k] = secret.test(k) && v !== null && v !== "" ? String(v).slice(0, 3) + "…" : v;
+    }
+    return out;
+  });
+  const stamp = new Date(now);
+  const pad = (x) => String(x).padStart(2, "0");
+  const time = `${pad(stamp.getHours())}:${pad(stamp.getMinutes())}:${pad(stamp.getSeconds())}`;
+  return `Запит о ${time} (unix ${Math.floor(now / 1000)})\n` + JSON.stringify(masked, null, 2);
+}
+
 // ───────────── Хмара Marstek ─────────────
 async function login() {
   const url =
@@ -352,10 +368,22 @@ async function main() {
       menu.title = "Marstek";
       menu.addAction("Показати віджет");
       menu.addAction("Змінити акаунт");
+      menu.addAction("Дані з хмари (діагностика)");
       menu.addCancelAction("Закрити");
       const choice = await menu.presentSheet();
       if (choice === -1) return;
       if (choice === 1 && !(await askCredentials())) return;
+      if (choice === 2) {
+        let text;
+        try {
+          text = diagnosticsText(await fetchDevices(), Date.now());
+        } catch (e) {
+          text = `Помилка: ${e.message || e}`;
+        }
+        Pasteboard.copyString(text);
+        await QuickLook.present(text);
+        return;
+      }
     }
   }
 
@@ -378,7 +406,7 @@ async function main() {
 
 if (typeof ListWidget === "undefined") {
   // Запуск поза Scriptable (тести в Node).
-  module.exports = { md5, summarize, formatDuration, formatWatts, CONFIG };
+  module.exports = { md5, summarize, formatDuration, formatWatts, diagnosticsText, CONFIG };
 } else {
   await main();
 }

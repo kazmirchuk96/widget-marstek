@@ -7,7 +7,7 @@ const AsyncFunction = (async () => {}).constructor;
   // 1) pure logic
   const mod = { exports: {} };
   await new AsyncFunction("module", src)(mod);
-  const { md5, summarize, formatDuration, formatWatts, CONFIG } = mod.exports;
+  const { md5, summarize, formatDuration, formatWatts, diagnosticsText, CONFIG } = mod.exports;
   for (const s of ["", "a", "abc", "password123", "Пароль!їє€", "x".repeat(55), "x".repeat(56), "x".repeat(64), "x".repeat(200)])
     assert.strictEqual(md5(s), crypto.createHash("md5").update(s, "utf8").digest("hex"), "md5 " + s.length);
   let r = summarize([{ soc: "80", load: 500, charge: 0, discharge: 500, report_time: 1794000000 }], CONFIG);
@@ -24,6 +24,9 @@ const AsyncFunction = (async () => {}).constructor;
   assert.strictEqual(formatDuration(7.066), "7 год 4 хв"); assert.strictEqual(formatDuration(0.5), "30 хв");
   assert.strictEqual(formatDuration(2), "2 год"); assert.strictEqual(formatDuration(null), "—");
   assert.strictEqual(formatWatts(350.4), "350 Вт"); assert.strictEqual(formatWatts(1250), "1,25 кВт");
+  const diag = diagnosticsText([{ devid: "abcdef123", sn: "SN998877", name: "Venus", soc: 95, load: 0 }], 1794000000000);
+  assert.ok(!diag.includes("abcdef123") && !diag.includes("SN998877"), "ідентифікатори приховано");
+  assert.ok(diag.includes('"soc": 95') && diag.includes('"name": "Venus"') && diag.includes("unix 1794000000"));
   console.log("logic OK");
 
   // 2) full run with Scriptable stubs
