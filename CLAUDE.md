@@ -16,6 +16,10 @@ node test/test.js
 
 Тест перевіряє MD5 проти `crypto`, розрахунок часу роботи та проганяє весь скрипт на заглушках Scriptable для малого, середнього віджета й екрана блокування. Запускай після кожної зміни `Marstek.js`. Справжній Scriptable і хмару Marstek звідси перевірити неможливо — кажи про це прямо.
 
+## Заливка на iPhone
+
+Користувач не розробник і файли вручну не переносить. `deploy.sh` проганяє тести й копіює `Marstek.js` у теку Scriptable в iCloud Drive (`~/Library/Mobile Documents/iCloud~dk~simonbs~Scriptable/Documents`), звідки файл сам синхронізується на iPhone. Хук `.git/hooks/post-commit` викликає `deploy.sh` після кожного коміту, тож коміт = заливка. Хук не зберігається в репозиторії: після клонування створи його заново (`#!/bin/sh` + `exec ./deploy.sh`, `chmod +x`). Після коміту перевір у виводі рядок `deploy:` і скажи користувачу, чи файл оновлено.
+
 ## Як влаштовано
 
 - Дані — з неофіційного хмарного API Marstek (`eu.hamedata.com`): вхід `v2_get_device.php` (email + md5 пароля) дає токен, `getDeviceList` повертає станції з полями `soc`, `load`, `charge`, `discharge`, `report_time`. Джерело знань про API — інтеграція `DoctaShizzle/marstek_cloud` для Home Assistant.
