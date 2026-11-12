@@ -373,5 +373,25 @@ function marstekCloud(env, dev) {
   env = newEnv(); env.kc["marstek.signkey"] = "WRONG"; github(env, src, sign(src));
   out = await runScript(env, loader);
   assert.ok(out.includes("Код підпису не підійшов") && !("/l/marstek-code.js" in env.files), out);
+  // Телефон тримає в кеші стару версію: адреса файлу містить підпис, тож стара копія не підставиться
+  env = newEnv(); github(env, src, sign(src));
+  await runScript(env, loader);
+  const jsUrl = env.calls.find((u) => u.includes("main/Marstek.js?"));
+  assert.ok(jsUrl && jsUrl.endsWith("?v=" + sign(src)), "адреса коду прив'язана до підпису: " + jsUrl);
+  assert.ok(/Marstek\.js\.sig\?v=\d+$/.test(env.calls.find((u) => u.includes(".sig"))), "підпис качається повз кеш");
+
+  // Код із помилкою набору (не 16 символів, кирилиця) не приймається — просимо ще раз
+  env = newEnv(); delete env.kc["marstek.signkey"]; github(env, src, sign(src));
+  env.alertAnswers = [{ choose: 0, fields: ["АВСD-2345-EFGH-6789"] }, { choose: 0, fields: ["abcd 2345 efgh 6789"] }, { choose: 0 }];
+  out = await runScript(env, loader, "app");
+  assert.ok(env.alerts.some((a) => a.includes("розпізнано 13")), "підказка про кількість символів");
+  assert.ok(env.kc["marstek.signkey"] === KEY && out.includes("76%"));
+
+  // Хибний код у Scriptable: показуємо, що саме було введено
+  env = newEnv(); delete env.kc["marstek.signkey"]; github(env, src, sign(src));
+  env.alertAnswers = [{ choose: 0, fields: ["ABCD-2345-EFGH-678X"] }, { choose: -1 }];
+  await runScript(env, loader, "app");
+  assert.ok(env.alerts.some((a) => a.includes("Було введено: ABCD-2345-EFGH-678X")), "показано введений код");
+  assert.ok(!("marstek.signkey" in env.kc) && !("/l/marstek-code.js" in env.files));
   console.log("завантажувач OK");
 })().catch((e) => { console.error("FAIL", e); process.exit(1); });

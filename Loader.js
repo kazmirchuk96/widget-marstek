@@ -2,7 +2,7 @@
 // These must be at the very top of the file. Do not edit.
 // icon-color: green; icon-glyph: battery-half;
 
-// Завантажувач віджета Marstek (версія 2). Вставляється в Scriptable один раз.
+// Завантажувач віджета Marstek (версія 3). Вставляється в Scriptable один раз.
 // - Раз на пів години перевіряє, чи є на GitHub нова версія віджета.
 // - Запускає нову версію лише якщо її підпис збігається з кодом підпису, збереженим на цьому iPhone.
 // - Якщо нова версія не запускається — повертається до попередньої робочої.
@@ -93,8 +93,9 @@ function writeMeta(meta) {
   fm.writeString(META_FILE, JSON.stringify(meta));
 }
 
-async function fetchText(name, timeout) {
-  const req = new Request(BASE + name);
+// tag додається до адреси, щоб ні телефон, ні GitHub не віддали стару копію з кешу.
+async function fetchText(name, timeout, tag) {
+  const req = new Request(BASE + name + "?v=" + encodeURIComponent(tag));
   req.timeoutInterval = timeout;
   const text = await req.loadString();
   if (!req.response || req.response.statusCode !== 200) throw new Error("HTTP");
@@ -122,20 +123,26 @@ async function showMessage(text) {
   Script.complete();
 }
 
+const dashed = (key) => (key.match(/.{1,4}/g) || []).join("-");
+
 async function askSignKey(note) {
-  const a = new Alert();
-  a.title = "Код підпису";
-  a.message =
-    (note ? note + "\n\n" : "") +
-    "Введіть код підпису оновлень (16 символів). Він потрібен один раз: віджет запускатиме лише ті оновлення, які підписані цим кодом.";
-  a.addTextField("XXXX-XXXX-XXXX-XXXX", "");
-  a.addAction("Зберегти");
-  a.addCancelAction("Скасувати");
-  if ((await a.presentAlert()) === -1) return false;
-  const key = a.textFieldValue(0).toUpperCase().replace(/[^A-Z0-9]/g, "");
-  if (key.length < 8) return false;
-  Keychain.set(KEY_SIGN, key);
-  return true;
+  for (;;) {
+    const a = new Alert();
+    a.title = "Код підпису";
+    a.message =
+      (note ? note + "\n\n" : "") +
+      "Введіть код підпису оновлень: 16 латинських літер і цифр. Він потрібен один раз: віджет запускатиме лише ті оновлення, які підписані цим кодом.";
+    a.addTextField("XXXX-XXXX-XXXX-XXXX", "");
+    a.addAction("Зберегти");
+    a.addCancelAction("Скасувати");
+    if ((await a.presentAlert()) === -1) return false;
+    const key = a.textFieldValue(0).toUpperCase().replace(/[^A-Z0-9]/g, "");
+    if (key.length === 16) {
+      Keychain.set(KEY_SIGN, key);
+      return true;
+    }
+    note = `У коді має бути 16 латинських літер і цифр, а розпізнано ${key.length}. Перевірте, що клавіатура англійська.`;
+  }
 }
 
 // ───────────── Запуск ─────────────
@@ -155,9 +162,9 @@ async function start() {
   let mismatch = false;
   if (due) {
     try {
-      const sig = (await fetchText("Marstek.js.sig", 5)).trim().toLowerCase();
+      const sig = (await fetchText("Marstek.js.sig", 5, Date.now())).trim().toLowerCase();
       if (/^[0-9a-f]{64}$/.test(sig) && sig !== meta.sig && sig !== meta.rejected) {
-        const code = await fetchText("Marstek.js", 8);
+        const code = await fetchText("Marstek.js", 8, sig);
         if (hmacHex(key, code) === sig) {
           candidate = code;
           candidateSig = sig;
@@ -194,7 +201,7 @@ async function start() {
 
   if (mismatch && config.runsInApp) {
     Keychain.remove(KEY_SIGN);
-    if (await askSignKey("Код підпису не підійшов. Перевірте його й введіть ще раз.")) return start();
+    if (await askSignKey(`Код підпису не підійшов. Було введено: ${dashed(key)}. Порівняйте з кодом і введіть ще раз.`)) return start();
     return;
   }
   return showMessage(
